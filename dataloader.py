@@ -15,7 +15,8 @@ import requests
 import tokenizers
 import torch
 import transformers
-
+from transformers import GPT2TokenizerFast
+from datasets import DatasetDict
 import utils
 
 LOGGER = utils.get_logger(__name__)
@@ -370,6 +371,17 @@ def get_dataset(
       'ag_news',
       cache_dir=cache_dir,
       streaming=streaming)
+  elif dataset_name == 'acyp':
+    dataset = datasets.load_from_disk('/gpfs/radev/scratch/dijk/sh2748/CaLMDD/data/AcyP/AcyP_original')
+    dataset = dataset.filter(
+        lambda x: "X" not in x["text"],
+        num_proc=1
+    )
+    train_test_split = dataset.train_test_split(test_size=0.1, seed=42)
+    dataset = DatasetDict({
+        'train': train_test_split['train'],
+        'validation': train_test_split['test']
+    })
   else:
     dataset = datasets.load_dataset(
       dataset_name,
@@ -449,6 +461,7 @@ def get_dataset(
       num_proc=num_proc,
       load_from_cache_file=True,
       desc='Tokenizing')
+  
   if dataset_name == 'ptb':
     tokenized_dataset = tokenized_dataset.remove_columns(
       'sentence')
@@ -491,6 +504,8 @@ def get_tokenizer(config):
   elif config.data.tokenizer_name_or_path == 'bert-base-uncased':
     tokenizer = transformers.BertTokenizer.\
       from_pretrained('bert-base-uncased')
+  elif config.data.tokenizer_name_or_path == 'acyp':
+    tokenizer = GPT2TokenizerFast.from_pretrained("/gpfs/radev/home/sh2748/CaLMDD/utils/custom_tokenizer")
   else:
     tokenizer = transformers.AutoTokenizer.from_pretrained(
       config.data.tokenizer_name_or_path)
