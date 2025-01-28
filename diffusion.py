@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import torchmetrics
 import transformers
 from torch import Tensor
+from ipdb import set_trace
 
 import dataloader
 import models
@@ -73,7 +74,11 @@ class Diffusion(L.LightningModule):
     super().__init__()
     self.save_hyperparameters()
     self.config = config
-
+    if hasattr(config, 'dfm'):
+      print("---------- DFM is True ----------")
+      self.dfm = config.dfm
+    else:
+      self.dfm = False
     self.tokenizer = tokenizer
     self.vocab_size = self.tokenizer.vocab_size
     self.sampler = self.config.sampling.predictor
@@ -356,6 +361,44 @@ class Diffusion(L.LightningModule):
     L_vb = L_vb_masked * (xt == self.mask_index)
 
     return self.T * L_vb
+  
+  def _dfm_loss(self, model_output, xt, x0, t):
+    dt = 1 / self.T
+    
+    if torch.is_tensor(t):
+      t = t[:, None]
+      assert t.ndim == 2
+      t = t.clamp(0., 1. - 1e-4)
+    alpha_t = 1 - t + torch.zeros_like(xt)  # (batch, d)
+    alpha_s = 1 - (t - dt) + torch.zeros_like(xt)  # (batch, d)
+    dalpha_t = alpha_s - alpha_t  # (batch, d)
+    
+    logits = model_output
+    log_p_1t = torch.log_softmax(logits, dim=-1)  # (batch, d, K)
+    log_p_1t_x1 = torch.gather(
+      log_p_1t, dim=-1, index=x0.unsqueeze(-1)
+    )  # (batch, d, 1)
+    log_p_1t_x1 = log_p_1t_x1.view(*x0.shape)    # (batch, d)
+    
+    p_1t = torch.exp(log_p_1t)  # (batch, d, K)
+    
+    p_1t_xt = torch.gather(
+      p_1t, dim=-1, index=xt.unsqueeze(-1)
+    )  # (batch, d, 1)
+    p_1t_xt = p_1t_xt.view(*x0.shape)  # (batch, d)
+    
+    
+    jump_coefficient = dalpha_t / alpha_t
+    
+    delta_x1_xt = (x0 == xt).to(log_p_1t.dtype)  # (batch, d)
+    
+    loss = -jump_coefficient * (
+            p_1t_xt - delta_x1_xt + (1 - delta_x1_xt) * log_p_1t_x1
+        )
+    
+    loss = loss * (xt == self.mask_index)
+    
+    return loss
 
   def _compute_loss(self, batch, prefix):
     if 'attention_mask' in batch:
@@ -835,10 +878,10 @@ class Diffusion(L.LightningModule):
 
   def _reconstruction_loss(self, x0):
     t0 = torch.zeros(x0.shape[0], dtype=self.dtype,
-                     device=self.device)
+                     device=self.device) # All zeros, indicating t0 time point
     assert self.config.noise.type == 'loglinear'
     # The above assert is for d3pm parameterization
-    unet_conditioning = self.noise(t0)[0][:, None]
+    unet_conditioning = self.noise(t0)[0][:, None] # total_noise at t0, which is essentially no noise
     model_output_t0 = self.forward(x0, unet_conditioning)
     return - torch.gather(input=model_output_t0,
                           dim=-1,
@@ -872,13 +915,25 @@ class Diffusion(L.LightningModule):
         model_output, sigma[:, None], xt, x0)
     
     if self.T > 0:
-      diffusion_loss = self._d3pm_loss(
-        model_output=model_output, xt=xt, x0=x0, t=t)
-      if self.parameterization == 'd3pm':
-        reconstruction_loss = self._reconstruction_loss(x0)
-      elif self.parameterization == 'subs':
-        reconstruction_loss = 0
-      return reconstruction_loss + diffusion_loss
+      if self.dfm:
+        # t shape [batch_size], 
+        total_loss = F.cross_entropy(
+            model_output.view(-1, model_output.size(-1)),
+            x0.view(-1),
+            reduction='none'
+        ).view(x0.size())
+      else:
+        diffusion_loss = self._d3pm_loss(
+          model_output=model_output, xt=xt, x0=x0, t=t)
+        if self.parameterization == 'd3pm':
+          reconstruction_loss = self._reconstruction_loss(x0)
+          total_loss = reconstruction_loss + diffusion_loss
+        elif self.parameterization == 'subs':
+          reconstruction_loss = 0
+          total_loss = reconstruction_loss + diffusion_loss # shape [batch_size, seq_len]
+        # set_trace()
+
+      return total_loss
     
     # SUBS parameterization, continuous time.
     log_p_theta = torch.gather(

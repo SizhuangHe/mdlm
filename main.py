@@ -11,6 +11,8 @@ import torch
 import dataloader
 import diffusion
 import utils
+from ipdb import set_trace
+from datetime import datetime
 
 omegaconf.OmegaConf.register_new_resolver(
   'cwd', os.getcwd)
@@ -110,8 +112,42 @@ def generate_samples(config, logger, tokenizer):
         num_steps=config.sampling.steps)
       text_samples = model.tokenizer.batch_decode(samples)
       model.compute_generative_perplexity(text_samples)
-  print('Text samples:', text_samples)
+  # print('Text samples:', text_samples)
+  
+  if config.data.train == "acyp":
+    print(f"\nSamples split by {tokenizer.eos_token}:")
+    all_sequences = []
+    for i, sample in enumerate(text_samples):
+      subsequences = sample.split(tokenizer.eos_token)
+      # Filter out empty strings
+      subsequences = [s.strip() for s in subsequences if s.strip()]
+      for j, subseq in enumerate(subsequences):
+        # set_trace()
+          if len(subseq) > 10:
+            all_sequences.append(subseq)
+  # set_trace()
+    text_samples = all_sequences
+  # set_trace()
+  timestamp = datetime.now().strftime('%Y.%m.%d.%H%M%S')
+  # Extract checkpoint path components
+  eval_dir = os.path.join(os.path.dirname(os.path.dirname(config.eval.checkpoint_path)), 
+                          'eval_results',
+                          f'{config.sampling.steps}_steps')
+  os.makedirs(eval_dir, exist_ok=True)
+  logger.info(f"Created evaluation results directory at {eval_dir}")
+  if ("fasta_index" in config.sampling) and (config.sampling.fasta_index is not None):
+    fasta_path = os.path.join(eval_dir, f"generated_sequences_{config.sampling.fasta_index}.fasta")
+  else:
+    fasta_path = os.path.join(eval_dir, 'generated_sequences.fasta')
+  logger.info(f"Sequences saved to {fasta_path}")
+  with open(fasta_path, 'w') as f:
+      for i, seq in enumerate(text_samples):
+          # Remove <pad> tokens from sequence
+          f.write(f'>sequence_{i+1}\n{seq}\n')
+        
+
   if not config.sampling.semi_ar:
+    
     print('Generative perplexity:',
           model.gen_ppl_metric.compute())
   return text_samples
