@@ -9,23 +9,27 @@
 #SBATCH --mem-per-cpu=32gb
 #SBATCH --gpus=1
 #SBATCH --constraint="h100|a100"
-#SBATCH --time=10:00:00
-date;hostname;pwd
+#SBATCH --time=6:00:00
 
-cd /home/sh2748/mdlm
+checkpoint_path=/gpfs/radev/scratch/dijk/sh2748/CaLMDD/benchmarking_runs/acyp/2025.01.28/164458/checkpoints/best.ckpt
+
+export HYDRA_FULL_ERROR=1
+
 module load miniconda
 conda activate c2s2
+cd /home/sh2748/mdlm
+
 python main.py \
+  mode=sample_eval \
   loader.batch_size=128 \
   loader.eval_batch_size=128 \
-  model=small \
   data=acyp \
-  wandb.name=mdlm-acyp \
-  parameterization=subs \
+  model=small \
+  parameterization=d3pm \
+  backbone=dit \
   model.length=128 \
-  eval.compute_generative_perplexity=True \
-  sampling.steps=1000 \
-  sampling.predictor=ddpm \
+  eval.checkpoint_path=$checkpoint_path \
   time_conditioning=True \
-  T=0 \
-  trainer.check_val_every_n_epoch=20
+  T=1000 \
+  sampling.steps=1000 \
+  +wandb.offline=true

@@ -5,20 +5,19 @@
 #SBATCH --mail-user=sizhuang.he@yale.edu
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2
+#SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=64gb
-#SBATCH --gpus=h100:2
-#SBATCH --qos=qos_dijk
-#SBATCH --time=1-00:00:00
+#SBATCH --gpus=a100:1
+#SBATCH --time=14:00:00
 cd /home/sh2748/mdlm
 module load miniconda
 conda activate c2s2
 
-srun /gpfs/radev/home/sh2748/.conda/envs/c2s2/bin/python main.py \
-  loader.global_batch_size=512 \
+python main.py \
+  loader.global_batch_size=128 \
   model=small \
-  data=lm1b \
-  wandb.name=dfm-lm1b \
+  data=acyp \
+  wandb.name=dfm-acyp \
   parameterization=d3pm \
   model.length=128 \
   eval.compute_generative_perplexity=True \
@@ -27,8 +26,8 @@ srun /gpfs/radev/home/sh2748/.conda/envs/c2s2/bin/python main.py \
   time_conditioning=True \
   T=1000 \
   ++dfm=True \
-  trainer.devices=2 \
-  trainer.val_check_interval=10000 \
-  checkpointing.save_dir=/gpfs/radev/scratch/dijk/sh2748/CaLMDD/benchmarking_runs/lm1b/2025.01.28/184539 \
+  trainer.devices=1 \
+  trainer.val_check_interval=1000 \
+  checkpointing.save_dir=/gpfs/radev/scratch/dijk/sh2748/CaLMDD/benchmarking_runs/acyp/2025.01.28/164458 \
   checkpointing.resume_from_ckpt=True \
-  checkpointing.resume_ckpt_path=/gpfs/radev/scratch/dijk/sh2748/CaLMDD/benchmarking_runs/lm1b/2025.01.28/184539/checkpoints/best.ckpt
+  checkpointing.resume_ckpt_path=/gpfs/radev/scratch/dijk/sh2748/CaLMDD/benchmarking_runs/acyp/2025.01.28/164458/checkpoints/249-18000.ckpt

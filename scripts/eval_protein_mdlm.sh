@@ -11,8 +11,7 @@
 #SBATCH --constraint="h100|a100"
 #SBATCH --time=6:00:00
 
-checkpoint_path=/gpfs/radev/scratch/dijk/sh2748/CaLMDD/benchmarking_runs/acyp/2025.01.15/125621/checkpoints/best.ckpt
-
+checkpoint_path=/gpfs/radev/scratch/dijk/sh2748/CaLMDD/benchmarking_runs/acyp/2025.01.15/143346/checkpoints/last.ckpt
 export HYDRA_FULL_ERROR=1
 
 module load miniconda
@@ -25,10 +24,10 @@ python main.py \
   loader.eval_batch_size=128 \
   data=acyp \
   model=small \
-  parameterization=d3pm \
+  parameterization=subs \
   backbone=dit \
   model.length=128 \
   eval.checkpoint_path=$checkpoint_path \
   time_conditioning=True \
-  T=64 \
+  T=1000 \
   +wandb.offline=true

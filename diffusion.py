@@ -632,7 +632,7 @@ class Diffusion(L.LightningModule):
     return self.mask_index * torch.ones(
       * batch_dims, dtype=torch.int64)
 
-  def _ddpm_caching_update(self, x, t, dt, p_x0=None):
+  def _ddpm_caching_update(self, x, t, dt, temperature, p_x0=None):
     assert self.config.noise.type == 'loglinear'
     sigma_t, _ = self.noise(t)
     if t.ndim > 1:
@@ -643,6 +643,7 @@ class Diffusion(L.LightningModule):
     assert move_chance_t.ndim == 3, move_chance_t.shape
     if p_x0 is None:
       p_x0 = self.forward(x, sigma_t).exp()
+    p_x0 = p_x0/(temperature+ 1e-10) + 1e-10
     
     assert move_chance_t.ndim == p_x0.ndim
     q_xs = p_x0 * (move_chance_t - move_chance_s)
@@ -652,7 +653,7 @@ class Diffusion(L.LightningModule):
     copy_flag = (x != self.mask_index).to(x.dtype)
     return p_x0, copy_flag * x + (1 - copy_flag) * _x
 
-  def _ddpm_update(self, x, t, dt):
+  def _ddpm_update(self, x, t, dt, temperature):
     sigma_t, _ = self.noise(t)
     sigma_s, _ = self.noise(t - dt)
     if sigma_t.ndim > 1:
@@ -667,6 +668,7 @@ class Diffusion(L.LightningModule):
     move_chance_s = move_chance_s[:, None, None]
     unet_conditioning = sigma_t
     log_p_x0 = self.forward(x, unet_conditioning)
+    log_p_x0 = log_p_x0/(temperature+1e-10) + 1e-10
     assert move_chance_t.ndim == log_p_x0.ndim
     # Technically, this isn't q_xs since there's a division
     # term that is missing. This division term doesn't affect
@@ -698,7 +700,8 @@ class Diffusion(L.LightningModule):
     return x
 
   @torch.no_grad()
-  def _sample(self, num_steps=None, eps=1e-5):
+  def _sample(self, num_steps=None, eps=1e-5, temperature=1.0):
+    print(f"+++++++ Sample temperature: {temperature} ++++++")
     """Generate samples from the model."""
     batch_size_per_gpu = self.config.loader.eval_batch_size
     if self.parameterization == 'ar':
@@ -708,7 +711,7 @@ class Diffusion(L.LightningModule):
       num_steps = self.config.sampling.steps
     x = self._sample_prior(
       batch_size_per_gpu,
-      self.config.model.length).to(self.device)
+      self.config.model.length).to(self.device) # The priors, t=T
     timesteps = torch.linspace(
       1, eps, num_steps + 1, device=self.device)
     dt = (1 - eps) / num_steps
@@ -718,29 +721,31 @@ class Diffusion(L.LightningModule):
       t = timesteps[i] * torch.ones(
         x.shape[0], 1, device=self.device)
       if self.sampler == 'ddpm':
-        x = self._ddpm_update(x, t, dt)
+        x = self._ddpm_update(x, t, dt, temperature=temperature)
       elif self.sampler == 'ddpm_cache':
         p_x0_cache, x_next = self._ddpm_caching_update(
-          x, t, dt, p_x0=p_x0_cache)
+          x, t, dt, p_x0=p_x0_cache, temperature=temperature)
         if (not torch.allclose(x_next, x)
             or self.time_conditioning):
           # Disable caching
           p_x0_cache = None
         x = x_next
       else:
-        x = self._analytic_update(x, t, dt)
+        x = self._analytic_update(x, t, dt, temperature=temperature)
 
     if self.config.sampling.noise_removal:
       t = timesteps[-1] * torch.ones(x.shape[0], 1,
                                      device=self.device)
       if self.sampler == 'analytic':
-        x = self._denoiser_update(x, t)
+        x = self._denoiser_update(x, t, temperature=temperature)
       else:
         unet_conditioning = self.noise(t)[0]
-        x = self.forward(x, unet_conditioning).argmax(dim=-1)
+        x = self.forward(x, unet_conditioning)
+        x = x/(temperature+1e-10) + 1e-10
+        x = x.argmax(dim=-1)
     return x
 
-  def restore_model_and_sample(self, num_steps, eps=1e-5):
+  def restore_model_and_sample(self, num_steps, eps=1e-5, temperature=1.0):
     """Generate samples from the model."""
     # Lightning auto-casting is not working in this method for some reason
     if self.ema:
@@ -752,7 +757,7 @@ class Diffusion(L.LightningModule):
         self.noise.parameters()))
     self.backbone.eval()
     self.noise.eval()
-    samples = self._sample(num_steps=num_steps, eps=eps)
+    samples = self._sample(num_steps=num_steps, eps=eps, temperature=temperature)
     if self.ema:
       self.ema.restore(itertools.chain(
         self.backbone.parameters(),
@@ -813,20 +818,33 @@ class Diffusion(L.LightningModule):
     score[..., self.mask_index] += extra_const
     return score
 
-  def _analytic_update(self, x, t, step_size):
+  def _analytic_update(self, x, t, step_size, temperature):
     curr_sigma, _ = self.noise(t)
     next_sigma, _ = self.noise(t - step_size)
     dsigma = curr_sigma - next_sigma
     score = self.get_score(x, curr_sigma)
     stag_score = self._staggered_score(score, dsigma)
     probs = stag_score * self._transp_transition(x, dsigma)
+    # ! probs is probability already
+    # Avoid numerical instability by working in log space
+    log_probs = torch.log(torch.clamp(probs, min=1e-20))  # Clamp to avoid log(0)
+    scaled_log_probs = log_probs / (temperature + 1e-10)
+    # Use log_softmax which is more numerically stable than log + softmax
+    probs = F.softmax(scaled_log_probs, dim=-1)
+    # set_trace()
+    # TODO: scale, check probs prob or logits
     return _sample_categorical(probs)
 
-  def _denoiser_update(self, x, t):
+  def _denoiser_update(self, x, t, temperature):
     sigma, _ = self.noise(t)
     score = self.get_score(x, sigma)
     stag_score = self._staggered_score(score, sigma)
     probs = stag_score * self._transp_transition(x, sigma)
+    # TODO: scale
+    log_probs = torch.log(torch.clamp(probs, min=1e-20))  # Clamp to avoid log(0)
+    scaled_log_probs = log_probs / (temperature + 1e-10)
+    # Use log_softmax which is more numerically stable than log + softmax
+    probs = F.softmax(scaled_log_probs, dim=-1)
     probs[..., self.mask_index] = 0
     samples = _sample_categorical(probs)
     return samples

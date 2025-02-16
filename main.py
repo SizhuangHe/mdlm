@@ -86,6 +86,7 @@ def _print_batch(train_ds, valid_ds, tokenizer, k=64):
 
 
 def generate_samples(config, logger, tokenizer):
+  temperature = config.sampling.temperature
   logger.info('Generating samples.')
   model = _load_from_checkpoint(config=config,
                                 tokenizer=tokenizer)
@@ -109,7 +110,7 @@ def generate_samples(config, logger, tokenizer):
       # any text after the first EOS token.
     else:
       samples = model.restore_model_and_sample(
-        num_steps=config.sampling.steps)
+        num_steps=config.sampling.steps, temperature=temperature)
       text_samples = model.tokenizer.batch_decode(samples)
       model.compute_generative_perplexity(text_samples)
   # print('Text samples:', text_samples)
@@ -132,6 +133,7 @@ def generate_samples(config, logger, tokenizer):
   # Extract checkpoint path components
   eval_dir = os.path.join(os.path.dirname(os.path.dirname(config.eval.checkpoint_path)), 
                           'eval_results',
+                          f'T_{config.sampling.temperature}',
                           f'{config.sampling.steps}_steps')
   os.makedirs(eval_dir, exist_ok=True)
   logger.info(f"Created evaluation results directory at {eval_dir}")

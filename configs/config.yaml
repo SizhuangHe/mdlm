@@ -37,6 +37,7 @@ sampling:
   stride_length: 1
   num_strides: 1
   fasta_index: null
+  temperature: 1.0
 
 training:
   ema: 0.9999
@@ -75,7 +76,7 @@ trainer:
   limit_train_batches: 1.0   # train on full dataset, can be used to toggle quick run
   limit_val_batches: 1.0     # validate on full dataset, can be used to toggle quick run
   check_val_every_n_epoch: null
-  val_check_interval: 10000
+  val_check_interval: null
 
 wandb:
   project: calmdd-benchmark
